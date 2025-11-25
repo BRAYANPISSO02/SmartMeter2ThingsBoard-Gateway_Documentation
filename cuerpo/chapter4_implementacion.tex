@@ -1,0 +1,1021 @@
+\chapter{Implementación}
+
+\section{Introducción}
+
+Este capítulo describe en detalle la implementación de los componentes del sistema SmartMeter2ThingsBoard-Gateway, incluyendo decisiones técnicas, algoritmos implementados, fragmentos de código relevantes y desafíos encontrados durante el desarrollo. Se cubren ambos subsistemas principales y sus herramientas administrativas.
+
+\section{Entorno de Desarrollo}
+
+\subsection{Tecnologías y Herramientas}
+
+\begin{table}[h]
+\centering
+\caption{Stack tecnológico del proyecto}
+\begin{tabular}{ll}
+\toprule
+\textbf{Componente} & \textbf{Tecnología/Versión} \\
+\midrule
+Lenguaje principal & Python 3.11+ \\
+Gestión de dependencias & Poetry \\
+Cliente DLMS & Implementación propia \\
+Cliente MQTT & Paho MQTT 2.0+ \\
+Serialización & PyYAML, JSON \\
+Comunicación serie & PySerial 3.5+ \\
+Logging & Python logging (JSON formatter) \\
+Testing & pytest, pytest-asyncio \\
+Contenedorización & Docker 24+, Docker Compose 2.x \\
+Base de datos & PostgreSQL 16 + TimescaleDB \\
+Mensajería & Apache Kafka 3.6 \\
+Plataforma IoT & ThingsBoard 4.2.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Estructura del Proyecto}
+
+\begin{verbatim}
+SmartMeter2ThingsBoard-Gateway/
+├── dlms_telemetry_orchestrator/
+│   ├── src/
+│   │   ├── dlms/
+│   │   │   ├── client.py          # Cliente DLMS
+│   │   │   ├── hdlc.py            # Protocolo HDLC
+│   │   │   ├── cosem.py           # Objetos COSEM
+│   │   │   └── security.py        # Autenticación HLS
+│   │   ├── orchestrator/
+│   │   │   ├── meter_manager.py   # Gestión de medidores
+│   │   │   ├── orchestrator.py    # Coordinación
+│   │   │   └── recovery.py        # Recuperación
+│   │   ├── mqtt/
+│   │   │   ├── gateway.py         # Gateway MQTT
+│   │   │   └── buffer.py          # Buffer local
+│   │   └── config/
+│   │       └── config_loader.py   # Carga de configuración
+│   ├── tests/                     # Tests unitarios
+│   ├── config.yaml                # Configuración
+│   ├── pyproject.toml             # Dependencias Poetry
+│   └── main.py                    # Punto de entrada
+├── thingsboard_telemetry_docker/
+│   ├── docker-compose.yml         # Orquestación contenedores
+│   ├── tb-postgres.yml            # Config ThingsBoard
+│   ├── init-scripts/              # Scripts inicialización
+│   └── volumes/                   # Persistencia
+└── README.md
+\end{verbatim}
+
+\section{Implementación del Cliente DLMS}
+
+\subsection{Protocolo HDLC}
+
+\subsubsection{Estructura de Trama}
+
+La implementación del protocolo HDLC incluye:
+
+\begin{verbatim}
+class HDLCFrame:
+    FLAG = 0x7E
+    
+    def __init__(self, address: int, control: int, 
+                 information: bytes = b''):
+        self.address = address
+        self.control = control
+        self.information = information
+    
+    def build(self) -> bytes:
+        """Construye trama HDLC completa"""
+        # Formato: Flag | Address | Control | HCS | Info | FCS | Flag
+        header = self._build_header()
+        hcs = self._calc_crc16(header)
+        
+        frame = header + hcs + self.information
+        fcs = self._calc_crc16(frame)
+        
+        return bytes([self.FLAG]) + frame + fcs + bytes([self.FLAG])
+    
+    def _build_header(self) -> bytes:
+        """Construye encabezado de trama"""
+        # Formato de dirección: 1, 2 o 4 bytes
+        addr_bytes = self._encode_address(self.address)
+        length = len(addr_bytes) + 1  # Address + Control
+        
+        # Formato de longitud: 3 bits tipo + 11 bits longitud
+        length_field = (0xA0 | (length >> 8) << 8) | (length & 0xFF)
+        
+        return bytes([length_field >> 8, length_field & 0xFF]) + \
+               addr_bytes + bytes([self.control])
+    
+    def _calc_crc16(self, data: bytes) -> bytes:
+        """Calcula CRC-16 (polinomio 0x1021)"""
+        crc = 0xFFFF
+        for byte in data:
+            crc ^= byte << 8
+            for _ in range(8):
+                if crc & 0x8000:
+                    crc = (crc << 1) ^ 0x1021
+                else:
+                    crc <<= 1
+                crc &= 0xFFFF
+        
+        # Invertir resultado
+        crc ^= 0xFFFF
+        return bytes([crc & 0xFF, crc >> 8])
+\end{verbatim}
+
+\subsubsection{Control de Flujo}
+
+Implementación de ventana deslizante:
+
+\begin{verbatim}
+class HDLCConnection:
+    def __init__(self, port: str, baudrate: int):
+        self.serial = serial.Serial(port, baudrate, timeout=5)
+        self.send_seq = 0
+        self.recv_seq = 0
+        self.window_size = 1  # HDLC modo normal
+    
+    def send_information(self, data: bytes) -> bytes:
+        """Envía trama I con datos y espera ACK"""
+        control = (self.send_seq << 1) | (self.recv_seq << 5) | 0x10
+        frame = HDLCFrame(self.address, control, data).build()
+        
+        self.serial.write(frame)
+        response = self._read_frame()
+        
+        # Verificar ACK
+        if response.control & 0x01 == 0x00:  # Trama I
+            self.recv_seq = (self.recv_seq + 1) % 8
+        
+        self.send_seq = (self.send_seq + 1) % 8
+        return response.information
+\end{verbatim}
+
+\subsection{Servicios DLMS}
+
+\subsubsection{Establecimiento de Asociación}
+
+Implementación del handshake AARQ/AARE:
+
+\begin{verbatim}
+class DLMSClient:
+    def connect(self, password: str = None) -> None:
+        """Establece asociación DLMS"""
+        # 1. Enviar SNRM (Set Normal Response Mode)
+        snrm = HDLCFrame(self.address, 0x93, 
+                         self._build_snrm()).build()
+        self.hdlc.send(snrm)
+        
+        # 2. Recibir UA (Unnumbered Acknowledgment)
+        ua = self.hdlc.receive()
+        if ua.control != 0x73:
+            raise DLMSException("SNRM rejected")
+        
+        # 3. Enviar AARQ (Application Association Request)
+        aarq = self._build_aarq(password)
+        response = self.hdlc.send_information(aarq)
+        
+        # 4. Procesar AARE (Application Association Response)
+        aare = self._parse_aare(response)
+        if aare['result'] != 0:  # 0 = accepted
+            raise DLMSException(f"Association rejected: {aare}")
+    
+    def _build_aarq(self, password: str) -> bytes:
+        """Construye PDU AARQ con autenticación"""
+        aarq_pdu = bytearray([0x60])  # AARQ tag
+        
+        # Application context: LN referencing with ciphering
+        aarq_pdu.extend([0xA1, 0x09, 0x06, 0x07, 0x60, 0x85, 0x74, 
+                         0x05, 0x08, 0x01, 0x01])
+        
+        # Authentication mechanism: HLS-GMAC (mechanism_id = 5)
+        if password:
+            aarq_pdu.extend([0x8A, 0x02, 0x07, 0x80])  # No security
+            aarq_pdu.extend([0xAC, 0x0A, 0x80, 0x08])
+            aarq_pdu.extend(password.encode('ascii'))
+        
+        # Actualizar longitud
+        aarq_pdu[1] = len(aarq_pdu) - 2
+        return bytes(aarq_pdu)
+\end{verbatim}
+
+\subsubsection{Servicio GET}
+
+Implementación de lectura de objetos COSEM:
+
+\begin{verbatim}
+def read_object(self, obis_code: str, 
+                attribute_id: int = 2) -> Any:
+    """Lee atributo de objeto COSEM mediante servicio GET"""
+    # Convertir OBIS a bytes (6 octetos)
+    obis_bytes = self._obis_to_bytes(obis_code)
+    
+    # Construir GET-Request
+    get_request = bytearray([
+        0xC0,  # GET-Request
+        0x01,  # GET-Request-Normal
+        0x81,  # Invoke ID
+    ])
+    
+    # COSEM Attribute Descriptor
+    get_request.extend([
+        0x00,  # Class ID MSB
+        0x03,  # Class ID LSB (Register)
+        *obis_bytes,
+        attribute_id  # Atributo 2 = value
+    ])
+    
+    # Enviar y recibir respuesta
+    response = self.hdlc.send_information(bytes(get_request))
+    
+    # Parsear GET-Response
+    return self._parse_get_response(response)
+
+def _parse_get_response(self, response: bytes) -> Any:
+    """Decodifica respuesta GET"""
+    if response[0] != 0xC4:  # GET-Response
+        raise DLMSException("Invalid response tag")
+    
+    if response[2] != 0x00:  # Data-Access-Result != success
+        raise DLMSException(f"Read failed: {response[2]}")
+    
+    # Decodificar valor según tipo DLMS
+    data_type = response[3]
+    value_bytes = response[4:]
+    
+    return self._decode_dlms_value(data_type, value_bytes)
+
+def _decode_dlms_value(self, data_type: int, 
+                       value: bytes) -> Any:
+    """Decodifica valores DLMS según tipo"""
+    decoders = {
+        0x06: lambda v: int.from_bytes(v, 'big', signed=True),  # long
+        0x12: lambda v: int.from_bytes(v[:2], 'big'),  # long-unsigned
+        0x09: lambda v: v.decode('ascii'),  # octet-string
+        0x0F: lambda v: int.from_bytes(v, 'big', signed=True),  # integer
+    }
+    
+    decoder = decoders.get(data_type)
+    if not decoder:
+        raise DLMSException(f"Unsupported type: {data_type}")
+    
+    return decoder(value)
+\end{verbatim}
+
+\subsection{Gestión de Perfiles de Carga}
+
+Los perfiles de carga (load profiles) almacenan datos históricos:
+
+\begin{verbatim}
+def read_load_profile(self, profile_obis: str,
+                      from_time: datetime,
+                      to_time: datetime) -> List[Dict]:
+    """Lee perfil de carga en rango temporal"""
+    # OBIS común: 1.0.99.1.0.255 (Load profile 1)
+    
+    # Construir GET-Request con selective access
+    get_request = self._build_get_with_range(
+        profile_obis, from_time, to_time
+    )
+    
+    response = self.hdlc.send_information(get_request)
+    
+    # Parsear estructura compleja:
+    # Array de estructuras [timestamp, valores...]
+    entries = self._parse_load_profile_response(response)
+    
+    # Transformar a formato legible
+    return [
+        {
+            'timestamp': entry[0],
+            'voltage_l1': entry[1],
+            'current_l1': entry[2],
+            'active_power': entry[3],
+            # ...
+        }
+        for entry in entries
+    ]
+\end{verbatim}
+
+\section{Implementación del Orquestador}
+
+\subsection{Gestión Concurrente de Medidores}
+
+\subsubsection{Thread Pool con Workers}
+
+\begin{verbatim}
+class Orchestrator:
+    def __init__(self, config_path: str):
+        self.config = ConfigLoader.load(config_path)
+        self.meter_manager = MeterManager()
+        self.mqtt_gateway = MQTTGateway(self.config['thingsboard'])
+        self.workers: List[threading.Thread] = []
+        self.running = False
+    
+    def start(self) -> None:
+        """Inicia workers para cada medidor"""
+        self.running = True
+        self.mqtt_gateway.connect()
+        
+        for meter_config in self.config['meters']:
+            worker = threading.Thread(
+                target=self._meter_worker,
+                args=(meter_config,),
+                daemon=True
+            )
+            worker.start()
+            self.workers.append(worker)
+        
+        logger.info(f"Started {len(self.workers)} meter workers")
+    
+    def _meter_worker(self, meter_config: Dict) -> None:
+        """Worker que lee un medidor periódicamente"""
+        device_id = meter_config['device_id']
+        interval = meter_config['read_interval']
+        
+        while self.running:
+            try:
+                # Leer medidor
+                data = self._read_meter(meter_config)
+                
+                # Publicar telemetría
+                self.mqtt_gateway.publish_telemetry(
+                    device_name=device_id,
+                    telemetry=data
+                )
+                
+                logger.info(f"{device_id}: Read successful")
+                
+            except Exception as e:
+                logger.error(f"{device_id}: Read failed - {e}")
+                self._handle_meter_failure(device_id, e)
+            
+            # Esperar hasta siguiente lectura
+            time.sleep(interval)
+\end{verbatim}
+
+\subsubsection{Pool de Conexiones}
+
+\begin{verbatim}
+class MeterManager:
+    def __init__(self):
+        self._connections: Dict[str, DLMSClient] = {}
+        self._lock = threading.Lock()
+    
+    def get_connection(self, meter_config: Dict) -> DLMSClient:
+        """Obtiene conexión reutilizable (thread-safe)"""
+        device_id = meter_config['device_id']
+        
+        with self._lock:
+            if device_id not in self._connections:
+                # Crear nueva conexión
+                client = DLMSClient(
+                    port=meter_config['serial_port'],
+                    baudrate=meter_config['baud_rate'],
+                    address=meter_config['address']
+                )
+                client.connect(meter_config['password'])
+                self._connections[device_id] = client
+            
+            return self._connections[device_id]
+    
+    def release_connection(self, device_id: str) -> None:
+        """Cierra y elimina conexión"""
+        with self._lock:
+            if device_id in self._connections:
+                self._connections[device_id].disconnect()
+                del self._connections[device_id]
+\end{verbatim}
+
+\subsection{Recuperación Automática}
+
+\subsubsection{Retry con Backoff Exponencial}
+
+\begin{verbatim}
+class RecoveryManager:
+    def __init__(self, max_retries: int = 5, 
+                 base_delay: float = 2.0):
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.retry_counts: Dict[str, int] = {}
+    
+    def execute_with_retry(self, device_id: str, 
+                          operation: Callable) -> Any:
+        """Ejecuta operación con reintentos"""
+        retry_count = self.retry_counts.get(device_id, 0)
+        
+        for attempt in range(self.max_retries):
+            try:
+                result = operation()
+                
+                # Reset contador en éxito
+                self.retry_counts[device_id] = 0
+                return result
+                
+            except (ConnectionError, TimeoutError) as e:
+                retry_count += 1
+                self.retry_counts[device_id] = retry_count
+                
+                if attempt < self.max_retries - 1:
+                    delay = self.base_delay * (2 ** attempt)
+                    jitter = random.uniform(0, 0.1 * delay)
+                    
+                    logger.warning(
+                        f"{device_id}: Attempt {attempt+1} failed, "
+                        f"retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay + jitter)
+                else:
+                    logger.error(
+                        f"{device_id}: All {self.max_retries} "
+                        f"attempts failed"
+                    )
+                    raise
+\end{verbatim}
+
+\subsubsection{Circuit Breaker}
+
+\begin{verbatim}
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int = 5,
+                 recovery_timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
+    
+    def call(self, operation: Callable) -> Any:
+        """Ejecuta operación con circuit breaker"""
+        if self.state == 'OPEN':
+            # Verificar si es momento de intentar recuperación
+            if time.time() - self.last_failure_time > self.recovery_timeout:
+                self.state = 'HALF_OPEN'
+                logger.info("Circuit breaker: OPEN -> HALF_OPEN")
+            else:
+                raise CircuitBreakerOpenError("Circuit is OPEN")
+        
+        try:
+            result = operation()
+            
+            # Éxito: resetear estado
+            if self.state == 'HALF_OPEN':
+                self.state = 'CLOSED'
+                self.failure_count = 0
+                logger.info("Circuit breaker: HALF_OPEN -> CLOSED")
+            
+            return result
+            
+        except Exception as e:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.state = 'OPEN'
+                logger.error("Circuit breaker: CLOSED -> OPEN")
+            
+            raise
+\end{verbatim}
+
+\section{Implementación del Gateway MQTT}
+
+\subsection{Cliente MQTT con Buffer Local}
+
+\begin{verbatim}
+class MQTTGateway:
+    def __init__(self, config: Dict):
+        self.client = mqtt.Client()
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+        
+        self.config = config
+        self.buffer = MessageBuffer(max_size=10000)
+        self.connected = False
+    
+    def connect(self) -> None:
+        """Conecta al broker MQTT"""
+        self.client.username_pw_set(self.config['username'])
+        self.client.connect(
+            self.config['host'],
+            self.config['port'],
+            keepalive=60
+        )
+        self.client.loop_start()
+    
+    def publish_telemetry(self, device_name: str, 
+                         telemetry: Dict) -> None:
+        """Publica telemetría con buffering"""
+        message = {
+            device_name: [{
+                'ts': int(time.time() * 1000),
+                'values': telemetry
+            }]
+        }
+        
+        if self.connected:
+            self._publish_now(message)
+        else:
+            # Buffer local si no hay conexión
+            self.buffer.add(message)
+            logger.warning("MQTT disconnected, buffering message")
+    
+    def _publish_now(self, message: Dict) -> None:
+        """Publica mensaje inmediatamente"""
+        topic = 'v1/gateway/telemetry'
+        payload = json.dumps(message)
+        
+        result = self.client.publish(topic, payload, qos=1)
+        
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise MQTTPublishError(f"Publish failed: {result.rc}")
+    
+    def _on_connect(self, client, userdata, flags, rc):
+        """Callback de conexión exitosa"""
+        self.connected = True
+        logger.info(f"MQTT connected with code {rc}")
+        
+        # Publicar mensajes buffereados
+        self._flush_buffer()
+    
+    def _flush_buffer(self) -> None:
+        """Publica mensajes pendientes en buffer"""
+        while not self.buffer.is_empty():
+            message = self.buffer.get()
+            try:
+                self._publish_now(message)
+            except Exception as e:
+                logger.error(f"Failed to flush message: {e}")
+                self.buffer.add(message)  # Re-encolar
+                break
+\end{verbatim}
+
+\subsection{Buffer FIFO con Límite}
+
+\begin{verbatim}
+class MessageBuffer:
+    def __init__(self, max_size: int = 10000):
+        self.max_size = max_size
+        self.queue = deque(maxlen=max_size)
+        self.lock = threading.Lock()
+    
+    def add(self, message: Dict) -> None:
+        """Agrega mensaje al buffer (descarta antiguos si lleno)"""
+        with self.lock:
+            if len(self.queue) >= self.max_size:
+                dropped = self.queue.popleft()
+                logger.warning(f"Buffer full, dropped message: {dropped}")
+            
+            self.queue.append(message)
+    
+    def get(self) -> Dict:
+        """Obtiene mensaje más antiguo"""
+        with self.lock:
+            if len(self.queue) == 0:
+                raise BufferEmptyError()
+            return self.queue.popleft()
+    
+    def is_empty(self) -> bool:
+        with self.lock:
+            return len(self.queue) == 0
+\end{verbatim}
+
+\section{Implementación de ThingsBoard}
+
+\subsection{Configuración Docker Compose}
+
+\begin{verbatim}
+version: '3.8'
+
+services:
+  zookeeper:
+    image: zookeeper:3.9
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - zookeeper-data:/data
+
+  kafka:
+    image: bitnami/kafka:3.6
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+    volumes:
+      - kafka-data:/bitnami/kafka
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB: thingsboard
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+
+  thingsboard:
+    image: thingsboard/tb-postgres:4.2.1
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    environment:
+      TB_QUEUE_TYPE: kafka
+      TB_KAFKA_SERVERS: kafka:9092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/thingsboard
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      REDIS_HOST: redis
+    ports:
+      - "9090:9090"   # HTTP
+      - "1883:1883"   # MQTT
+      - "5683:5683"   # CoAP
+    volumes:
+      - tb-data:/data
+      - tb-logs:/var/log/thingsboard
+
+volumes:
+  zookeeper-data:
+  kafka-data:
+  postgres-data:
+  redis-data:
+  tb-data:
+  tb-logs:
+\end{verbatim}
+
+\subsection{Script de Inicialización}
+
+\begin{verbatim}
+-- init-scripts/01-timescale.sql
+
+-- Habilitar extensión TimescaleDB
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- Convertir tabla de telemetría a hypertable
+SELECT create_hypertable(
+    'ts_kv', 
+    'ts',
+    chunk_time_interval => 86400000,  -- 1 día en ms
+    if_not_exists => TRUE
+);
+
+-- Política de retención: 1 año
+SELECT add_retention_policy(
+    'ts_kv',
+    INTERVAL '365 days',
+    if_not_exists => TRUE
+);
+
+-- Política de compresión: después de 7 días
+SELECT add_compression_policy(
+    'ts_kv',
+    INTERVAL '7 days',
+    if_not_exists => TRUE
+);
+
+-- Índices para consultas comunes
+CREATE INDEX IF NOT EXISTS idx_ts_kv_entity_key 
+    ON ts_kv (entity_id, key, ts DESC);
+
+-- Vistas materializadas para agregaciones
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_daily_energy AS
+SELECT 
+    entity_id,
+    time_bucket('1 day', to_timestamp(ts/1000)) AS day,
+    AVG(CAST(long_v AS DOUBLE PRECISION)) AS avg_power,
+    MAX(CAST(long_v AS DOUBLE PRECISION)) AS max_power,
+    MIN(CAST(long_v AS DOUBLE PRECISION)) AS min_power
+FROM ts_kv
+WHERE key = 'active_power'
+GROUP BY entity_id, day;
+
+-- Refresh automático cada hora
+CREATE OR REPLACE FUNCTION refresh_mv_daily_energy()
+RETURNS void AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW mv_daily_energy;
+END;
+$$ LANGUAGE plpgsql;
+\end{verbatim}
+
+\section{Herramientas Administrativas}
+
+\subsection{CLI de Gestión de Medidores}
+
+\begin{verbatim}
+# meter_cli.py
+
+import click
+from orchestrator import Orchestrator
+
+@click.group()
+def cli():
+    """CLI para gestión de medidores DLMS"""
+    pass
+
+@cli.command()
+@click.argument('device_id')
+@click.argument('obis_code')
+def read(device_id, obis_code):
+    """Lee valor de objeto COSEM"""
+    orch = Orchestrator('config.yaml')
+    meter = orch.meter_manager.get_connection({'device_id': device_id})
+    
+    try:
+        value = meter.read_object(obis_code)
+        click.echo(f"{obis_code}: {value}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+
+@cli.command()
+@click.argument('device_id')
+def scan(device_id):
+    """Escanea objetos disponibles en medidor"""
+    orch = Orchestrator('config.yaml')
+    meter = orch.meter_manager.get_connection({'device_id': device_id})
+    
+    # Leer lista de objetos (0.0.40.0.0.255)
+    objects = meter.read_object('0.0.40.0.0.255')
+    
+    click.echo("Objetos COSEM disponibles:")
+    for obj in objects:
+        click.echo(f"  - {obj['obis']}: {obj['description']}")
+
+if __name__ == '__main__':
+    cli()
+\end{verbatim}
+
+Uso:
+\begin{verbatim}
+$ python meter_cli.py read meter_001 1.0.1.8.0.255
+1.0.1.8.0.255: 15432.8 kWh
+
+$ python meter_cli.py scan meter_001
+Objetos COSEM disponibles:
+  - 1.0.1.8.0.255: Energía activa total
+  - 1.0.32.7.0.255: Voltaje L1
+  - 1.0.31.7.0.255: Corriente L1
+  ...
+\end{verbatim}
+
+\subsection{Dashboard de Monitoreo}
+
+Dashboard personalizado en ThingsBoard con widgets para:
+
+\begin{itemize}
+    \item \textbf{Mapa de medidores:} Ubicación geográfica con estado (online/offline)
+    \item \textbf{Gráficos de series temporales:} Voltaje, corriente, potencia
+    \item \textbf{Tabla de alarmas:} Eventos anormales recientes
+    \item \textbf{Indicadores KPI:} Total de energía, factor de potencia promedio
+    \item \textbf{Heatmap de consumo:} Patrón de consumo por hora del día
+\end{itemize}
+
+Configuración de widgets mediante JSON:
+\begin{verbatim}
+{
+    "type": "latest",
+    "dataKeys": [
+        {"name": "voltage_l1", "label": "Voltaje L1", "color": "#2196F3"},
+        {"name": "current_l1", "label": "Corriente L1", "color": "#FFC107"}
+    ],
+    "alarms": {
+        "voltage_high": "Voltaje > 253V",
+        "voltage_low": "Voltaje < 207V"
+    }
+}
+\end{verbatim}
+
+\section{Logging y Observabilidad}
+
+\subsection{Logging Estructurado}
+
+\begin{verbatim}
+import logging
+import json
+from datetime import datetime
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        log_data = {
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'level': record.levelname,
+            'logger': record.name,
+            'message': record.getMessage(),
+        }
+        
+        # Añadir campos extra si existen
+        if hasattr(record, 'device_id'):
+            log_data['device_id'] = record.device_id
+        if hasattr(record, 'duration_ms'):
+            log_data['duration_ms'] = record.duration_ms
+        
+        return json.dumps(log_data)
+
+# Configuración
+handler = logging.FileHandler('/var/log/orchestrator.log')
+handler.setFormatter(JSONFormatter())
+logger = logging.getLogger('orchestrator')
+logger.addHandler(handler)
+
+# Uso con contexto
+logger.info(
+    "Meter read successful",
+    extra={'device_id': 'meter_001', 'duration_ms': 1250}
+)
+\end{verbatim}
+
+\subsection{Métricas con Prometheus}
+
+\begin{verbatim}
+from prometheus_client import Counter, Histogram, Gauge
+
+# Definición de métricas
+reads_total = Counter(
+    'dlms_reads_total',
+    'Total DLMS reads',
+    ['device_id', 'status']
+)
+
+read_duration = Histogram(
+    'dlms_read_duration_seconds',
+    'DLMS read duration',
+    ['device_id']
+)
+
+devices_online = Gauge(
+    'dlms_devices_online',
+    'Number of online devices'
+)
+
+# Instrumentación
+def read_meter_with_metrics(device_id: str):
+    with read_duration.labels(device_id=device_id).time():
+        try:
+            result = read_meter(device_id)
+            reads_total.labels(device_id=device_id, status='success').inc()
+            return result
+        except Exception:
+            reads_total.labels(device_id=device_id, status='failure').inc()
+            raise
+\end{verbatim}
+
+\section{Testing}
+
+\subsection{Tests Unitarios}
+
+\begin{verbatim}
+import pytest
+from dlms.hdlc import HDLCFrame
+
+def test_hdlc_frame_build():
+    """Test construcción de trama HDLC"""
+    frame = HDLCFrame(address=1, control=0x10, information=b'\x01\x02')
+    built = frame.build()
+    
+    assert built[0] == 0x7E  # Flag inicio
+    assert built[-1] == 0x7E  # Flag fin
+    assert len(built) > 8  # Mínimo: flag + header + hcs + info + fcs + flag
+
+def test_crc16_calculation():
+    """Test cálculo CRC-16"""
+    frame = HDLCFrame(address=1, control=0x10)
+    data = bytes([0xA0, 0x07, 0x01, 0x10])
+    
+    crc = frame._calc_crc16(data)
+    
+    # CRC conocido para esta secuencia
+    assert crc == bytes([0x7E, 0x9C])
+
+@pytest.fixture
+def mock_serial():
+    """Fixture para serial port mock"""
+    class MockSerial:
+        def __init__(self):
+            self.responses = []
+        
+        def write(self, data):
+            pass
+        
+        def read(self, size):
+            if self.responses:
+                return self.responses.pop(0)
+            return b''
+    
+    return MockSerial()
+
+def test_dlms_get_request(mock_serial):
+    """Test servicio GET"""
+    client = DLMSClient(serial_port=mock_serial)
+    mock_serial.responses = [
+        b'\x7E\xA0\x10...\x7E',  # UA response
+        b'\x7E\xA0\x20...\x7E',  # AARE response
+        b'\x7E\xA0\x0F\xC4\x01\x00\x06\x00\x00\x05\xDC...\x7E',  # GET response (1500)
+    ]
+    
+    client.connect()
+    value = client.read_object('1.0.1.8.0.255')
+    
+    assert value == 1500
+\end{verbatim}
+
+\section{Desafíos y Soluciones}
+
+\subsection{Desafío 1: Timeouts Variables}
+
+\textbf{Problema:} Medidores con diferentes latencias causaban timeouts frecuentes.
+
+\textbf{Solución:} Implementación de timeouts adaptativos basados en historial de latencias:
+
+\begin{verbatim}
+class AdaptiveTimeout:
+    def __init__(self, base_timeout: float = 5.0):
+        self.base_timeout = base_timeout
+        self.latencies: Dict[str, List[float]] = {}
+    
+    def get_timeout(self, device_id: str) -> float:
+        if device_id not in self.latencies:
+            return self.base_timeout
+        
+        # Usar percentil 95 de latencias históricas
+        latencies = self.latencies[device_id][-100:]  # últimas 100
+        p95 = np.percentile(latencies, 95)
+        
+        # Timeout = P95 + 2 * desviación estándar
+        return p95 + 2 * np.std(latencies)
+\end{verbatim}
+
+\subsection{Desafío 2: Pérdida de Telemetría en Desconexiones}
+
+\textbf{Problema:} Pérdida de datos durante caídas de red.
+
+\textbf{Solución:} Buffer persistente con SQLite:
+
+\begin{verbatim}
+class PersistentBuffer:
+    def __init__(self, db_path: str = 'buffer.db'):
+        self.conn = sqlite3.connect(db_path)
+        self._create_table()
+    
+    def _create_table(self):
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS buffer (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER,
+                message TEXT
+            )
+        ''')
+    
+    def add(self, message: Dict):
+        self.conn.execute(
+            'INSERT INTO buffer (timestamp, message) VALUES (?, ?)',
+            (int(time.time()), json.dumps(message))
+        )
+        self.conn.commit()
+\end{verbatim}
+
+\subsection{Desafío 3: Sincronización de Lecturas}
+
+\textbf{Problema:} Lecturas desincronizadas entre medidores.
+
+\textbf{Solución:} Scheduling coordinado con APScheduler:
+
+\begin{verbatim}
+from apscheduler.schedulers.background import BackgroundScheduler
+
+scheduler = BackgroundScheduler()
+
+# Programar lecturas en minutos específicos (coordinación)
+for meter in meters:
+    scheduler.add_job(
+        func=read_meter,
+        args=[meter],
+        trigger='cron',
+        minute='*/5',  # Cada 5 minutos en :00, :05, :10...
+        second='0'
+    )
+
+scheduler.start()
+\end{verbatim}
+
+\section{Conclusiones del Capítulo}
+
+Este capítulo ha detallado la implementación de:
+
+\begin{itemize}
+    \item Cliente DLMS completo con protocolo HDLC y servicios GET/SET/ACTION
+    \item Orquestador multi-threaded con pool de conexiones y recuperación automática
+    \item Gateway MQTT con buffering local y QoS 1
+    \item Plataforma ThingsBoard contenerizada con TimescaleDB y Kafka
+    \item Herramientas administrativas (CLI, dashboards)
+    \item Sistema de logging estructurado y métricas
+    \item Tests unitarios para validación
+\end{itemize}
+
+Los desafíos encontrados (timeouts variables, pérdida de datos, sincronización) se resolvieron mediante patrones de diseño probados (adaptive timeouts, persistent buffer, coordinated scheduling).
+
+El siguiente capítulo presenta las pruebas realizadas para validar la funcionalidad, rendimiento y resiliencia del sistema.

@@ -1,0 +1,405 @@
+\chapter{Marco Teórico}
+
+\section{Introducción}
+
+Este capítulo presenta los fundamentos teóricos y tecnológicos que sustentan el desarrollo del sistema SmartMeter2ThingsBoard-Gateway. Se abordan los conceptos relacionados con medición inteligente, el protocolo DLMS/COSEM, plataformas IoT, comunicación M2M (Machine-to-Machine) y arquitecturas de sistemas distribuidos para telemetría en tiempo real.
+
+\section{Medidores Inteligentes}
+
+\subsection{Definición y Características}
+
+Los medidores inteligentes o \textit{smart meters} son dispositivos de medición electrónica que registran el consumo de energía eléctrica con granularidad temporal fina y son capaces de comunicarse bidireccionalmente con sistemas centrales \cite{smartgrid2020}. A diferencia de los medidores electromecánicos tradicionales, los medidores inteligentes ofrecen:
+
+\begin{itemize}
+    \item Medición en tiempo real de múltiples variables eléctricas
+    \item Almacenamiento de perfiles de carga históricos
+    \item Capacidad de comunicación remota
+    \item Detección de eventos y anomalías
+    \item Soporte para tarifación diferenciada
+\end{itemize}
+
+\subsection{Variables Eléctricas Monitoreadas}
+
+Los medidores inteligentes típicamente registran las siguientes magnitudes:
+
+\begin{table}[h]
+\centering
+\caption{Variables eléctricas monitoreadas}
+\begin{tabular}{lll}
+\toprule
+\textbf{Variable} & \textbf{Unidad} & \textbf{Descripción} \\
+\midrule
+Voltaje (V) & Voltios & Tensión por fase (L1, L2, L3) \\
+Corriente (I) & Amperios & Corriente por fase (L1, L2, L3) \\
+Potencia Activa (P) & Vatios (W) & Potencia instantánea consumida \\
+Potencia Reactiva (Q) & VAR & Componente reactiva de potencia \\
+Factor de Potencia (FP) & Adimensional & Relación P/S \\
+Frecuencia (f) & Hertz (Hz) & Frecuencia de la red \\
+Energía Activa (E) & Vatios-hora (Wh) & Energía acumulada \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Protocolo DLMS/COSEM}
+
+\subsection{Descripción General}
+
+DLMS (Device Language Message Specification) y COSEM (Companion Specification for Energy Metering) forman el estándar internacional IEC 62056 para comunicación con dispositivos de medición de energía. Este protocolo define:
+
+\begin{itemize}
+    \item Un modelo de objetos orientado a la interfaz para representar datos y funcionalidades
+    \item Servicios de comunicación independientes del medio físico
+    \item Mecanismos de seguridad y autenticación
+    \item Perfiles de aplicación para diferentes casos de uso
+\end{itemize}
+
+\subsection{Arquitectura en Capas}
+
+El protocolo DLMS/COSEM sigue una arquitectura OSI de capas:
+
+\begin{enumerate}
+    \item \textbf{Capa Física:} Define las interfaces de comunicación (óptica, RS-485, TCP/IP, etc.)
+    \item \textbf{Capa de Enlace de Datos (HDLC):} Gestiona el establecimiento, mantenimiento y terminación de conexiones
+    \item \textbf{Capa de Aplicación (ACSE/DLMS):} Maneja asociaciones, autenticación y servicios de lectura/escritura
+\end{enumerate}
+
+\subsection{Modelo de Objetos COSEM}
+
+COSEM define objetos que representan datos y funcionalidades del medidor mediante:
+
+\begin{itemize}
+    \item \textbf{OBIS Codes:} Identificadores estándar para objetos (ejemplo: 1.0.1.8.0.255 para energía activa total)
+    \item \textbf{Clases de Interfaz:} Definen la estructura y métodos de cada tipo de objeto
+    \item \textbf{Atributos:} Datos asociados a cada objeto
+    \item \textbf{Métodos:} Operaciones que pueden ejecutarse sobre los objetos
+\end{itemize}
+
+\subsection{HDLC (High-Level Data Link Control)}
+
+HDLC es el protocolo de enlace de datos utilizado en DLMS/COSEM para comunicación punto a punto. Sus características incluyen:
+
+\begin{itemize}
+    \item Transmisión orientada a tramas con detección de errores CRC-16
+    \item Control de flujo mediante ventanas deslizantes
+    \item Direccionamiento de dispositivos mediante direcciones lógicas
+    \item Soporte para modos balanceado y no balanceado
+\end{itemize}
+
+\subsubsection{Estructura de Trama HDLC}
+
+\begin{verbatim}
+Flag | Address | Control | HCS | Information | FCS | Flag
+0x7E |  1-4B   |   1B    | 2B  |  Variable   | 2B  | 0x7E
+\end{verbatim}
+
+Donde:
+\begin{itemize}
+    \item \textbf{Flag:} Delimitador de inicio/fin (0x7E)
+    \item \textbf{Address:} Dirección del dispositivo
+    \item \textbf{Control:} Tipo y secuencia de trama
+    \item \textbf{HCS:} Header Check Sequence (CRC-16 del encabezado)
+    \item \textbf{Information:} Datos de la capa DLMS
+    \item \textbf{FCS:} Frame Check Sequence (CRC-16 de toda la trama)
+\end{itemize}
+
+\subsection{Servicios DLMS}
+
+Los principales servicios DLMS son:
+
+\begin{table}[h]
+\centering
+\caption{Servicios DLMS principales}
+\begin{tabular}{ll}
+\toprule
+\textbf{Servicio} & \textbf{Descripción} \\
+\midrule
+GET & Lectura de atributos de objetos \\
+SET & Escritura de atributos de objetos \\
+ACTION & Ejecución de métodos de objetos \\
+GET-WITH-LIST & Lectura de múltiples atributos \\
+EVENT-NOTIFICATION & Notificación asíncrona de eventos \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Internet de las Cosas (IoT)}
+
+\subsection{Definición y Características}
+
+El Internet de las Cosas se refiere a la interconexión de dispositivos físicos mediante internet, permitiéndoles recopilar e intercambiar datos. Las características clave son:
+
+\begin{itemize}
+    \item Conectividad ubicua de dispositivos
+    \item Capacidad de procesamiento distribuido
+    \item Generación masiva de datos (Big Data)
+    \item Comunicación M2M (Machine-to-Machine)
+    \item Integración con servicios en la nube
+\end{itemize}
+
+\subsection{Arquitectura IoT}
+
+Una arquitectura IoT típica comprende cuatro capas:
+
+\begin{enumerate}
+    \item \textbf{Capa de Dispositivos:} Sensores, actuadores y gateways
+    \item \textbf{Capa de Red:} Protocolos de comunicación y conectividad
+    \item \textbf{Capa de Plataforma:} Gestión de dispositivos, procesamiento y almacenamiento
+    \item \textbf{Capa de Aplicación:} Interfaces de usuario y lógica de negocio
+\end{enumerate}
+
+\subsection{Plataformas IoT}
+
+Las plataformas IoT proporcionan infraestructura para:
+
+\begin{itemize}
+    \item Registro y gestión de dispositivos
+    \item Ingesta y procesamiento de telemetría
+    \item Almacenamiento de datos time-series
+    \item Motor de reglas y alertas
+    \item APIs para integración
+    \item Dashboards de visualización
+\end{itemize}
+
+\section{ThingsBoard}
+
+\subsection{Descripción General}
+
+ThingsBoard es una plataforma IoT de código abierto diseñada para recopilación, procesamiento, visualización y gestión de dispositivos IoT. Está construida con tecnologías escalables y ofrece:
+
+\begin{itemize}
+    \item Arquitectura de microservicios
+    \item Soporte multi-tenancy
+    \item Procesamiento de eventos en tiempo real
+    \item Motor de reglas visual
+    \item APIs REST y WebSocket
+\end{itemize}
+
+\subsection{Arquitectura de ThingsBoard}
+
+ThingsBoard utiliza una arquitectura basada en:
+
+\begin{itemize}
+    \item \textbf{PostgreSQL:} Base de datos relacional para metadatos
+    \item \textbf{TimescaleDB:} Extensión de PostgreSQL para series temporales
+    \item \textbf{Apache Kafka:} Sistema de mensajería para procesamiento asíncrono
+    \item \textbf{Redis:} Caché en memoria para sesiones y datos temporales
+    \item \textbf{Rule Engine:} Motor de reglas para procesamiento de eventos
+\end{itemize}
+
+\subsection{Modelo de Datos}
+
+ThingsBoard organiza los datos mediante:
+
+\begin{itemize}
+    \item \textbf{Dispositivos:} Entidades que envían telemetría
+    \item \textbf{Assets:} Representaciones lógicas de entidades físicas
+    \item \textbf{Relaciones:} Vínculos entre dispositivos y assets
+    \item \textbf{Telemetría:} Datos de series temporales
+    \item \textbf{Atributos:} Metadatos estáticos o semi-estáticos
+\end{itemize}
+
+\section{Protocolo MQTT}
+
+\subsection{Descripción General}
+
+MQTT (Message Queuing Telemetry Transport) es un protocolo de mensajería ligero diseñado para comunicación M2M en entornos con ancho de banda limitado. Sus características principales son:
+
+\begin{itemize}
+    \item Arquitectura Publish-Subscribe
+    \item Bajo overhead de protocolo
+    \item Niveles de Quality of Service (QoS)
+    \item Soporte para Last Will and Testament (LWT)
+    \item Persistencia de sesiones
+\end{itemize}
+
+\subsection{Niveles de QoS}
+
+MQTT define tres niveles de calidad de servicio:
+
+\begin{table}[h]
+\centering
+\caption{Niveles de QoS en MQTT}
+\begin{tabular}{cll}
+\toprule
+\textbf{QoS} & \textbf{Nombre} & \textbf{Garantía} \\
+\midrule
+0 & At most once & Sin confirmación, puede perderse \\
+1 & At least once & Con confirmación, puede duplicarse \\
+2 & Exactly once & Protocolo de 4 vías, entrega única \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+En este proyecto se utiliza \textbf{QoS 1} para garantizar la entrega de telemetría sin el overhead del QoS 2.
+
+\subsection{Tópicos MQTT}
+
+Los tópicos en MQTT siguen una estructura jerárquica separada por barras:
+
+\begin{verbatim}
+v1/devices/me/telemetry
+v1/devices/me/attributes
+v1/gateway/telemetry
+\end{verbatim}
+
+\section{Arquitecturas de Telemetría}
+
+\subsection{Patrón Gateway}
+
+El patrón Gateway es fundamental en sistemas IoT donde dispositivos sin conectividad directa a internet requieren un intermediario. Características:
+
+\begin{itemize}
+    \item Agregación de datos de múltiples dispositivos
+    \item Transformación de protocolos
+    \item Buffering local para tolerancia a desconexiones
+    \item Procesamiento edge (en el borde)
+\end{itemize}
+
+\subsection{Time-Series Databases}
+
+Las bases de datos de series temporales están optimizadas para:
+
+\begin{itemize}
+    \item Ingestión masiva de datos ordenados temporalmente
+    \item Consultas con agregaciones temporales (promedio, máximo, mínimo)
+    \item Retención de datos con políticas de compactación
+    \item Particionamiento temporal automático
+\end{itemize}
+
+\subsection{Arquitectura Lambda}
+
+La arquitectura Lambda combina procesamiento batch y streaming:
+
+\begin{itemize}
+    \item \textbf{Batch Layer:} Procesamiento de grandes volúmenes históricos
+    \item \textbf{Speed Layer:} Procesamiento en tiempo real
+    \item \textbf{Serving Layer:} Unificación de resultados batch y streaming
+\end{itemize}
+
+\section{Resiliencia y Recuperación}
+
+\subsection{Patrones de Recuperación}
+
+Los sistemas de telemetría críticos requieren mecanismos de recuperación:
+
+\begin{itemize}
+    \item \textbf{Retry con backoff exponencial:} Reintentos con espera creciente
+    \item \textbf{Circuit Breaker:} Prevención de llamadas a servicios fallidos
+    \item \textbf{Bulkhead:} Aislamiento de recursos para evitar fallos en cascada
+    \item \textbf{Timeout:} Límites de tiempo para operaciones
+\end{itemize}
+
+\subsection{Health Checks}
+
+Los health checks permiten monitorear el estado del sistema:
+
+\begin{itemize}
+    \item Verificación de conectividad con dispositivos
+    \item Monitoreo de latencias y timeouts
+    \item Detección de degradación de rendimiento
+    \item Métricas de tasa de éxito/fallo
+\end{itemize}
+
+\section{Contenedorización con Docker}
+
+\subsection{Descripción General}
+
+Docker es una plataforma de contenedorización que permite empaquetar aplicaciones con sus dependencias en unidades portables. Beneficios:
+
+\begin{itemize}
+    \item Aislamiento de procesos
+    \item Portabilidad entre entornos
+    \item Escalabilidad horizontal
+    \item Gestión declarativa de infraestructura
+\end{itemize}
+
+\subsection{Docker Compose}
+
+Docker Compose permite definir aplicaciones multi-contenedor mediante archivos YAML:
+
+\begin{verbatim}
+services:
+  thingsboard:
+    image: thingsboard/tb-postgres:4.2.1
+    environment:
+      - TB_QUEUE_TYPE=kafka
+    depends_on:
+      - postgres
+      - kafka
+\end{verbatim}
+
+\section{Seguridad en IoT}
+
+\subsection{SSL/TLS}
+
+El protocolo TLS (Transport Layer Security) proporciona:
+
+\begin{itemize}
+    \item Encriptación de comunicaciones
+    \item Autenticación mutua mediante certificados
+    \item Integridad de mensajes
+    \item Prevención de ataques man-in-the-middle
+\end{itemize}
+
+\subsection{Autenticación y Autorización}
+
+Los sistemas IoT implementan múltiples niveles de seguridad:
+
+\begin{itemize}
+    \item Autenticación basada en tokens
+    \item Control de acceso basado en roles (RBAC)
+    \item API keys con scopes limitados
+    \item Rotación automática de credenciales
+\end{itemize}
+
+\section{Estado del Arte}
+
+\subsection{Soluciones Comerciales}
+
+Existen soluciones comerciales para integración DLMS/COSEM:
+
+\begin{itemize}
+    \item \textbf{Gurux DLMS/COSEM:} Librería comercial .NET
+    \item \textbf{Trilliant SecureMesh:} Sistema propietario AMI
+    \item \textbf{Landis+Gyr Gridstream:} Plataforma end-to-end
+\end{itemize}
+
+Limitaciones: Alto costo, falta de flexibilidad, dependencia de proveedor.
+
+\subsection{Proyectos de Código Abierto}
+
+Proyectos open-source relacionados:
+
+\begin{itemize}
+    \item \textbf{python-dlms-cosem:} Librería Python parcialmente implementada
+    \item \textbf{Node-RED DLMS:} Nodos básicos para Node-RED
+    \item \textbf{OpenMUC DLMS:} Framework Java para sistemas SCADA
+\end{itemize}
+
+Limitaciones: Implementaciones incompletas, falta de integración con plataformas IoT modernas.
+
+\subsection{Contribución de este Trabajo}
+
+Este proyecto aporta:
+
+\begin{itemize}
+    \item Implementación completa y documentada del stack DLMS/COSEM
+    \item Integración nativa con plataforma IoT moderna (ThingsBoard)
+    \item Arquitectura resiliente con recuperación automática
+    \item Sistema completo de administración y monitoreo
+    \item Código abierto y extensible
+\end{itemize}
+
+\section{Conclusiones del Capítulo}
+
+Este capítulo ha presentado los fundamentos teóricos que sustentan el desarrollo del sistema SmartMeter2ThingsBoard-Gateway. Se han cubierto aspectos relacionados con:
+
+\begin{itemize}
+    \item El protocolo DLMS/COSEM y su implementación técnica
+    \item Arquitecturas IoT y plataformas de gestión
+    \item Protocolos de comunicación M2M como MQTT
+    \item Patrones de diseño para sistemas de telemetría resilientes
+    \item Estado actual de soluciones comerciales y open-source
+\end{itemize}
+
+Estos conceptos forman la base sobre la cual se diseñó e implementó la arquitectura del sistema, que se describe en detalle en el siguiente capítulo.

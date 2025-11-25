@@ -5,7 +5,17 @@
 \addcontentsline{toc}{section}{Abstract}
 \label{sec::abstract}
 
-<Resumen en inglés: máximo de 4000 caracteres, texto plano (sin símbolos), resumen estructurado de la tesis (introducción o motivación, objetivos, hallazgos y conclusiones)>
+The increasing adoption of smart meters in electrical distribution networks requires robust and scalable telemetry systems capable of efficiently managing real-time data. This thesis presents the design, implementation, and validation of SmartMeter2ThingsBoard-Gateway, an open-source IoT telemetry system that integrates DLMS/COSEM smart meters with the ThingsBoard platform.
+
+The main objective was to develop a comprehensive system facilitating data collection, processing, and visualization from DLMS/COSEM smart meters through native integration with ThingsBoard. The system architecture comprises two main components: a Python-based DLMS Telemetry Orchestrator that manages concurrent communication with multiple meters, and a containerized ThingsBoard platform that provides storage, processing, and visualization of telemetry data.
+
+The implementation includes a complete DLMS/COSEM protocol stack with HDLC support, GET/SET/ACTION services, and HLS authentication. The orchestrator employs a multi-threaded architecture with connection pooling, automatic recovery mechanisms with exponential backoff, circuit breaker pattern, and local buffering for network resilience. Integration with ThingsBoard is achieved via MQTT protocol with QoS 1, enabling automatic device provisioning and bidirectional configuration.
+
+Experimental validation demonstrated 99.90\% system availability during 7-day continuous operation, zero telemetry data loss through resilient buffering mechanisms, scalability to 100+ concurrent meters with average latencies under 2.5s, and end-to-end latency of 1.97s for the complete telemetry flow. Unit tests achieved 94\% code coverage, and all seven specific objectives were successfully validated through functional, integration, performance, and resilience tests.
+
+Compared to commercial solutions, this open-source system provides comparable or superior functionality at 98.9\% cost reduction, supporting multiple meter manufacturers, providing complete observability through structured logging and metrics, and offering native IoT platform integration with customizable dashboards and REST APIs.
+
+The project contributes to the industrial IoT ecosystem by democratizing access to smart metering technology, particularly beneficial for small electrical utilities and cooperatives. Future work includes horizontal scaling implementation, edge processing with machine learning for anomaly detection, multi-protocol support extension, and blockchain integration for immutable telemetry audit trails.
 
 
 \newpage
@@ -13,6 +23,15 @@
 \addcontentsline{toc}{section}{Resumen}
 \label{sec::resumen}
 
+La creciente adopción de medidores inteligentes en redes de distribución eléctrica requiere sistemas de telemetría robustos y escalables capaces de gestionar datos en tiempo real de manera eficiente. Esta tesis presenta el diseño, implementación y validación de SmartMeter2ThingsBoard-Gateway, un sistema IoT de telemetría de código abierto que integra medidores inteligentes DLMS/COSEM con la plataforma ThingsBoard.
 
-<Resumen en español: máximo de 4000 caracteres, texto plano (sin símbolos), resumen estructurado de la tesis (introducción o motivación, objetivos, hallazgos y conclusiones)>
+El objetivo principal fue desarrollar un sistema integral que facilite la recopilación, procesamiento y visualización de datos desde medidores inteligentes DLMS/COSEM mediante integración nativa con ThingsBoard. La arquitectura del sistema comprende dos componentes principales: un Orquestador de Telemetría DLMS basado en Python que gestiona la comunicación concurrente con múltiples medidores, y una plataforma ThingsBoard contenerizada que proporciona almacenamiento, procesamiento y visualización de datos de telemetría.
+
+La implementación incluye un stack completo del protocolo DLMS/COSEM con soporte HDLC, servicios GET/SET/ACTION y autenticación HLS. El orquestador emplea una arquitectura multi-hilo con pool de conexiones, mecanismos de recuperación automática con backoff exponencial, patrón circuit breaker y buffering local para resiliencia ante fallos de red. La integración con ThingsBoard se logra mediante protocolo MQTT con QoS 1, permitiendo aprovisionamiento automático de dispositivos y configuración bidireccional.
+
+La validación experimental demostró disponibilidad del sistema del 99.90\% durante operación continua de 7 días, cero pérdida de datos de telemetría mediante mecanismos de buffering resiliente, escalabilidad a más de 100 medidores concurrentes con latencias promedio menores a 2.5s, y latencia end-to-end de 1.97s para el flujo completo de telemetría. Las pruebas unitarias alcanzaron 94\% de cobertura de código, y los siete objetivos específicos fueron validados exitosamente mediante pruebas funcionales, de integración, rendimiento y resiliencia.
+
+Comparado con soluciones comerciales, este sistema de código abierto proporciona funcionalidad comparable o superior con reducción de costos del 98.9\%, soportando múltiples fabricantes de medidores, ofreciendo observabilidad completa mediante logging estructurado y métricas, e integrándose nativamente con plataforma IoT con dashboards personalizables y APIs REST.
+
+El proyecto contribuye al ecosistema IoT industrial al democratizar el acceso a tecnología de medición inteligente, siendo particularmente beneficioso para empresas eléctricas y cooperativas pequeñas. El trabajo futuro incluye implementación de escalamiento horizontal, procesamiento edge con aprendizaje automático para detección de anomalías, extensión de soporte multi-protocolo e integración con blockchain para auditoría inmutable de telemetría.
 

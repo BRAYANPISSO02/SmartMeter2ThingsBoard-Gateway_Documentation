@@ -1,0 +1,509 @@
+\chapter{Arquitectura del Sistema}
+
+\section{Introducción}
+
+Este capítulo presenta la arquitectura del sistema SmartMeter2ThingsBoard-Gateway, describiendo los componentes principales, sus interacciones y las decisiones de diseño que permiten cumplir con los requisitos de escalabilidad, resiliencia y mantenibilidad. El sistema está compuesto por dos subsistemas principales que se integran para formar una solución completa de telemetría IoT para medidores inteligentes.
+
+\section{Visión General del Sistema}
+
+\subsection{Componentes Principales}
+
+El sistema se estructura en dos componentes principales:
+
+\begin{enumerate}
+    \item \textbf{DLMS Telemetry Orchestrator:} Sistema Python que gestiona la comunicación con medidores DLMS/COSEM y publica telemetría a ThingsBoard
+    \item \textbf{ThingsBoard Telemetry Platform:} Plataforma IoT contenerizada que recibe, almacena, procesa y visualiza la telemetría
+\end{enumerate}
+
+\subsection{Flujo de Datos General}
+
+El flujo de datos en el sistema sigue esta secuencia:
+
+\begin{enumerate}
+    \item Medidores DLMS/COSEM se comunican vía puerto serie (RS-232/RS-485) o TCP/IP
+    \item El Orquestador DLMS establece sesiones con cada medidor según configuración
+    \item Se ejecutan lecturas de objetos COSEM (perfiles de carga, registros, estado)
+    \item Los datos se transforman al formato JSON de ThingsBoard
+    \item La telemetría se publica vía MQTT con QoS 1
+    \item ThingsBoard recibe, procesa y almacena los datos
+    \item Dashboards y APIs exponen los datos para visualización y análisis
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=2cm, auto, >=latex']
+    % Nodes
+    \node [draw, rectangle, minimum width=2cm, minimum height=1cm] (meter) {Medidores\\DLMS/COSEM};
+    \node [draw, rectangle, minimum width=2cm, minimum height=1cm, right=of meter] (orch) {DLMS\\Orchestrator};
+    \node [draw, rectangle, minimum width=2cm, minimum height=1cm, right=of orch] (mqtt) {MQTT\\Broker};
+    \node [draw, rectangle, minimum width=2cm, minimum height=1cm, right=of mqtt] (tb) {ThingsBoard\\Platform};
+    
+    % Arrows
+    \draw[->] (meter) -- node {HDLC/TCP} (orch);
+    \draw[->] (orch) -- node {Telemetry} (mqtt);
+    \draw[->] (mqtt) -- node {Subscribe} (tb);
+\end{tikzpicture}
+\caption{Flujo de datos en el sistema}
+\end{figure}
+
+\section{DLMS Telemetry Orchestrator}
+
+\subsection{Arquitectura del Orquestador}
+
+El orquestador DLMS está diseñado con una arquitectura modular que separa responsabilidades:
+
+\begin{itemize}
+    \item \textbf{DLMS Client:} Capa de bajo nivel que implementa el stack DLMS/COSEM
+    \item \textbf{Meter Manager:} Gestiona el ciclo de vida de conexiones con medidores
+    \item \textbf{Orchestrator:} Coordina lecturas concurrentes de múltiples medidores
+    \item \textbf{Recovery Manager:} Maneja reconexiones y reintentos
+    \item \textbf{MQTT Gateway:} Interfaz de salida hacia ThingsBoard
+\end{itemize}
+
+\subsubsection{DLMS Client}
+
+Responsabilidades:
+\begin{itemize}
+    \item Implementación del protocolo HDLC (tramas, CRC, direccionamiento)
+    \item Gestión de sesiones DLMS (AARQ, AARE, RLRQ, RLRE)
+    \item Codificación/decodificación ASN.1 de PDUs
+    \item Ejecución de servicios GET/SET/ACTION
+    \item Manejo de cifrado y autenticación
+\end{itemize}
+
+Decisiones de diseño:
+\begin{itemize}
+    \item Uso de la librería \texttt{pyserial} para comunicación serie
+    \item Implementación propia del protocolo HDLC (no dependencia de librerías externas)
+    \item Soporte para autenticación HLS (High Level Security)
+    \item Timeouts configurables por dispositivo
+\end{itemize}
+
+\subsubsection{Meter Manager}
+
+Responsabilidades:
+\begin{itemize}
+    \item Pool de conexiones a medidores
+    \item Scheduling de lecturas periódicas
+    \item Validación de respuestas
+    \item Gestión de estado de conexiones
+\end{itemize}
+
+Patrón de diseño implementado: \textbf{Object Pool} para reutilización eficiente de conexiones.
+
+\subsubsection{Orchestrator}
+
+Responsabilidades:
+\begin{itemize}
+    \item Carga de configuración desde YAML
+    \item Creación de workers concurrentes (uno por medidor)
+    \item Distribución de tareas de lectura
+    \item Agregación de resultados
+    \item Manejo de señales del sistema (SIGTERM, SIGINT)
+\end{itemize}
+
+Patrón de concurrencia: \textbf{Thread Pool} con un thread por medidor para paralelización de lecturas.
+
+\subsubsection{Recovery Manager}
+
+Responsabilidades:
+\begin{itemize}
+    \item Detección de fallos de conexión
+    \item Implementación de retry con backoff exponencial
+    \item Registro de errores y eventos
+    \item Notificación de dispositivos offline
+\end{itemize}
+
+Estrategia de recuperación:
+\begin{verbatim}
+retry_count = 0
+max_retries = 5
+base_delay = 2  # segundos
+
+while retry_count < max_retries:
+    try:
+        connect_and_read()
+        break
+    except ConnectionError:
+        delay = base_delay * (2 ** retry_count)
+        sleep(delay)
+        retry_count += 1
+\end{verbatim}
+
+\subsubsection{MQTT Gateway}
+
+Responsabilidades:
+\begin{itemize}
+    \item Establecimiento de conexión MQTT con ThingsBoard
+    \item Transformación de datos DLMS a formato JSON
+    \item Publicación con QoS 1
+    \item Buffering local en caso de desconexión
+\end{itemize}
+
+Formato de mensaje:
+\begin{verbatim}
+{
+    "deviceName": "meter_001",
+    "ts": 1704067200000,
+    "values": {
+        "voltage_l1": 230.5,
+        "current_l1": 12.3,
+        "active_power": 2835.0,
+        "energy_total": 15432.8
+    }
+}
+\end{verbatim}
+
+\subsection{Configuración del Orquestador}
+
+El orquestador se configura mediante archivo YAML:
+
+\begin{verbatim}
+meters:
+  - device_id: "meter_001"
+    serial_port: "/dev/ttyUSB0"
+    baud_rate: 9600
+    address: 1
+    password: "00000000"
+    read_interval: 300  # segundos
+    obis_codes:
+      - "1.0.1.8.0.255"  # Energía activa total
+      - "1.0.32.7.0.255"  # Voltaje L1
+      - "1.0.31.7.0.255"  # Corriente L1
+
+thingsboard:
+  host: "localhost"
+  port: 1883
+  username: "gateway_token"
+  
+logging:
+  level: "INFO"
+  file: "/var/log/dlms_orchestrator.log"
+\end{verbatim}
+
+\subsection{Diagrama de Clases}
+
+\begin{verbatim}
+DLMSClient
+├── connect()
+├── disconnect()
+├── read_object(obis_code)
+├── write_object(obis_code, value)
+└── action(obis_code, method_id)
+
+MeterManager
+├── get_connection(device_id)
+├── release_connection(device_id)
+├── read_meter(device_id, obis_codes)
+└── health_check(device_id)
+
+Orchestrator
+├── load_config(yaml_path)
+├── start_workers()
+├── stop_workers()
+└── schedule_reads()
+
+MQTTGateway
+├── connect()
+├── publish_telemetry(data)
+├── publish_attributes(data)
+└── disconnect()
+\end{verbatim}
+
+\section{ThingsBoard Telemetry Platform}
+
+\subsection{Arquitectura Contenerizada}
+
+La plataforma ThingsBoard se despliega mediante Docker Compose con los siguientes servicios:
+
+\begin{enumerate}
+    \item \textbf{ThingsBoard:} Aplicación principal (puerto 9090)
+    \item \textbf{PostgreSQL:} Base de datos relacional (puerto 5432)
+    \item \textbf{TimescaleDB:} Extensión para series temporales
+    \item \textbf{Apache Kafka:} Sistema de mensajería (puerto 9092)
+    \item \textbf{Zookeeper:} Coordinación de Kafka (puerto 2181)
+    \item \textbf{Redis:} Caché en memoria (puerto 6379)
+\end{enumerate}
+
+\subsection{Configuración de Servicios}
+
+\subsubsection{ThingsBoard}
+
+Variables de entorno clave:
+\begin{verbatim}
+TB_QUEUE_TYPE=kafka
+SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/thingsboard
+TB_KAFKA_SERVERS=kafka:9092
+MQTT_BIND_ADDRESS=0.0.0.0
+MQTT_BIND_PORT=1883
+\end{verbatim}
+
+\subsubsection{PostgreSQL con TimescaleDB}
+
+Configuración de base de datos:
+\begin{verbatim}
+CREATE DATABASE thingsboard;
+\c thingsboard
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+SELECT create_hypertable('ts_kv', 'ts', 
+    chunk_time_interval => 86400000);  -- 1 día
+\end{verbatim}
+
+\subsubsection{Kafka}
+
+Configuración de tópicos:
+\begin{verbatim}
+tb_rule_engine.main
+tb_core
+tb_transport.api.requests
+tb_transport.api.responses
+\end{verbatim}
+
+\subsection{Modelo de Datos en ThingsBoard}
+
+\subsubsection{Jerarquía de Entidades}
+
+\begin{verbatim}
+Tenant (Sistema)
+└── Customer (Organización)
+    └── Asset (Subestación/Zona)
+        └── Device (Medidor individual)
+            ├── Telemetry (Series temporales)
+            ├── Attributes (Metadatos)
+            └── Relations (Vínculos)
+\end{verbatim}
+
+\subsubsection{Atributos de Dispositivos}
+
+Atributos compartidos (configuración desde servidor):
+\begin{itemize}
+    \item \texttt{read\_interval}: Frecuencia de lectura en segundos
+    \item \texttt{obis\_codes}: Lista de objetos COSEM a leer
+    \item \texttt{sampling\_enabled}: Activar/desactivar muestreo
+\end{itemize}
+
+Atributos del cliente (enviados por el dispositivo):
+\begin{itemize}
+    \item \texttt{firmware\_version}: Versión de firmware del medidor
+    \item \texttt{last\_connection}: Timestamp de última conexión
+    \item \texttt{device\_type}: Tipo/modelo de medidor
+\end{itemize}
+
+\subsubsection{Telemetría}
+
+Claves de telemetría (time-series):
+\begin{verbatim}
+voltage_l1, voltage_l2, voltage_l3
+current_l1, current_l2, current_l3
+active_power_total
+reactive_power_total
+power_factor
+frequency
+energy_active_import
+energy_active_export
+\end{verbatim}
+
+\subsection{Motor de Reglas}
+
+El motor de reglas de ThingsBoard se utiliza para:
+
+\begin{enumerate}
+    \item \textbf{Alarmas:} Detección de condiciones anormales
+    \begin{itemize}
+        \item Voltaje fuera de rango (± 10\% de nominal)
+        \item Potencia excede umbral configurado
+        \item Dispositivo sin telemetría por más de 15 minutos
+    \end{itemize}
+    
+    \item \textbf{Transformaciones:} Cálculo de métricas derivadas
+    \begin{itemize}
+        \item Potencia aparente: $S = \sqrt{P^2 + Q^2}$
+        \item Consumo horario: Diferencia de energía acumulada
+    \end{itemize}
+    
+    \item \textbf{Enrutamiento:} Distribución de telemetría
+    \begin{itemize}
+        \item Replicación a sistemas externos vía REST API
+        \item Notificaciones por email/SMS ante alarmas
+    \end{itemize}
+\end{enumerate}
+
+\subsection{APIs REST}
+
+ThingsBoard expone APIs para:
+
+\begin{itemize}
+    \item \textbf{Autenticación:} POST /api/auth/login
+    \item \textbf{Gestión de dispositivos:} GET/POST/PUT/DELETE /api/device
+    \item \textbf{Consulta de telemetría:} GET /api/plugins/telemetry/DEVICE/\{deviceId\}/values/timeseries
+    \item \textbf{Actualización de atributos:} POST /api/plugins/telemetry/DEVICE/\{deviceId\}/attributes/SHARED\_SCOPE
+\end{itemize}
+
+Ejemplo de consulta de telemetría:
+\begin{verbatim}
+GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries
+    ?keys=voltage_l1,current_l1
+    &startTs=1704067200000
+    &endTs=1704153600000
+    &interval=3600000
+    &agg=AVG
+\end{verbatim}
+
+\section{Integración entre Componentes}
+
+\subsection{Protocolo de Comunicación}
+
+La integración se realiza mediante MQTT con el tópico:
+\begin{verbatim}
+v1/gateway/telemetry
+\end{verbatim}
+
+Secuencia de conexión:
+\begin{enumerate}
+    \item Gateway se conecta con access token
+    \item Suscripción a tópicos de atributos compartidos
+    \item Publicación periódica de telemetría
+    \item ThingsBoard crea/actualiza dispositivos automáticamente
+\end{enumerate}
+
+\subsection{Gestión de Dispositivos}
+
+Flujo de provisioning automático:
+\begin{enumerate}
+    \item Orquestador publica telemetría con \texttt{deviceName}
+    \item Si el dispositivo no existe, ThingsBoard lo crea automáticamente
+    \item Se asignan atributos por defecto
+    \item El dispositivo queda vinculado al gateway
+\end{enumerate}
+
+\subsection{Sincronización de Configuración}
+
+ThingsBoard puede actualizar la configuración del orquestador:
+\begin{enumerate}
+    \item Se modifican atributos compartidos desde la UI
+    \item ThingsBoard publica en tópico de atributos
+    \item Orquestador suscrito recibe actualización
+    \item Se aplican cambios en tiempo de ejecución (sin reinicio)
+\end{enumerate}
+
+\section{Resiliencia y Alta Disponibilidad}
+
+\subsection{Recuperación ante Fallos}
+
+\subsubsection{Fallos de Medidores}
+
+Estrategia:
+\begin{itemize}
+    \item Retry con backoff exponencial (5 intentos)
+    \item Continuar con otros medidores (no bloquear pipeline)
+    \item Registro de dispositivos offline en logs
+    \item Notificación a ThingsBoard (atributo \texttt{connection\_status})
+\end{itemize}
+
+\subsubsection{Fallos de Red}
+
+Estrategia:
+\begin{itemize}
+    \item Buffering local de telemetría en cola FIFO
+    \item Publicación en batch al recuperar conexión
+    \item Límite de buffer: 10,000 mensajes (descarte LRU)
+\end{itemize}
+
+\subsubsection{Fallos de ThingsBoard}
+
+Estrategia:
+\begin{itemize}
+    \item Detección mediante health check (GET /api/health)
+    \item Espera de 60s antes de reintentar publicación
+    \item Persistencia de telemetría pendiente en SQLite local
+\end{itemize}
+
+\subsection{Monitoreo y Observabilidad}
+
+\subsubsection{Métricas del Orquestador}
+
+\begin{itemize}
+    \item \texttt{reads\_success\_total}: Lecturas exitosas
+    \item \texttt{reads\_failed\_total}: Lecturas fallidas
+    \item \texttt{read\_duration\_seconds}: Latencia de lectura
+    \item \texttt{devices\_online}: Dispositivos conectados
+    \item \texttt{mqtt\_publish\_success}: Publicaciones exitosas
+\end{itemize}
+
+\subsubsection{Logs Estructurados}
+
+Formato JSON para facilitar procesamiento:
+\begin{verbatim}
+{
+    "timestamp": "2024-01-01T12:00:00Z",
+    "level": "INFO",
+    "device_id": "meter_001",
+    "event": "read_success",
+    "duration_ms": 1250,
+    "obis_count": 8
+}
+\end{verbatim}
+
+\section{Seguridad}
+
+\subsection{Autenticación}
+
+\begin{itemize}
+    \item ThingsBoard: Autenticación basada en JWT tokens
+    \item Gateway MQTT: Access token único por tenant
+    \item Medidores DLMS: Passwords HLS-GMAC
+\end{itemize}
+
+\subsection{Cifrado}
+
+\begin{itemize}
+    \item Comunicación MQTT sobre TLS 1.2+
+    \item Passwords DLMS almacenados cifrados (AES-256)
+    \item Certificados X.509 para ThingsBoard
+\end{itemize}
+
+\subsection{Control de Acceso}
+
+ThingsBoard implementa RBAC con roles:
+\begin{itemize}
+    \item \textbf{Tenant Administrator:} Control total del tenant
+    \item \textbf{Customer User:} Acceso a dispositivos de su organización
+    \item \textbf{Dashboard User:} Solo visualización (sin escritura)
+\end{itemize}
+
+\section{Escalabilidad}
+
+\subsection{Escalabilidad Horizontal}
+
+Componentes escalables:
+\begin{itemize}
+    \item \textbf{Orquestador:} Múltiples instancias con particionamiento de medidores
+    \item \textbf{ThingsBoard:} Clúster de microservicios
+    \item \textbf{Kafka:} Particionamiento de tópicos
+    \item \textbf{PostgreSQL:} Sharding por tenant
+\end{itemize}
+
+\subsection{Límites de Capacidad}
+
+Con configuración actual (single-node):
+\begin{itemize}
+    \item Medidores concurrentes: 100-200
+    \item Telemetría ingestion: 10,000 msg/s
+    \item Retención de datos: 1 año (con compactación)
+    \item Dashboards concurrentes: 50
+\end{itemize}
+
+\section{Conclusiones del Capítulo}
+
+Este capítulo ha presentado la arquitectura completa del sistema SmartMeter2ThingsBoard-Gateway, detallando:
+
+\begin{itemize}
+    \item La estructura modular del orquestador DLMS con separación de responsabilidades
+    \item La arquitectura contenerizada de la plataforma ThingsBoard
+    \item Los mecanismos de integración mediante MQTT
+    \item Las estrategias de resiliencia y recuperación ante fallos
+    \item Los aspectos de seguridad, escalabilidad y observabilidad
+\end{itemize}
+
+Esta arquitectura permite cumplir con los requisitos de escalabilidad, confiabilidad y mantenibilidad establecidos en el capítulo de introducción. El siguiente capítulo describe en detalle la implementación de cada componente.

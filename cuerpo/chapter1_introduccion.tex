@@ -1,0 +1,204 @@
+\chapter{Introducción}
+
+\section{Contexto y Motivación}
+
+La transformación digital de la infraestructura eléctrica representa uno de los desafíos más importantes en la actualidad. Los medidores inteligentes o \textit{smart meters} han revolucionado la manera en que se mide, monitorea y gestiona el consumo de energía eléctrica. Sin embargo, la integración de estos dispositivos en sistemas IoT (Internet de las Cosas) capaces de procesar, almacenar y visualizar datos en tiempo real sigue siendo un reto técnico significativo.
+
+El protocolo DLMS/COSEM (Device Language Message Specification / Companion Specification for Energy Metering) es el estándar internacional IEC 62056 utilizado para la comunicación con medidores inteligentes. A pesar de ser ampliamente adoptado en la industria, su implementación presenta desafíos relacionados con la complejidad del protocolo, la gestión concurrente de múltiples dispositivos y la necesidad de garantizar alta disponibilidad y confiabilidad en la adquisición de datos.
+
+Por otro lado, ThingsBoard es una plataforma IoT de código abierto que ofrece capacidades avanzadas de gestión de dispositivos, procesamiento de telemetría, visualización de datos y generación de alertas. Sin embargo, ThingsBoard no cuenta con soporte nativo para el protocolo DLMS/COSEM, lo que crea una brecha tecnológica que limita su aplicación en el sector de medición inteligente.
+
+Este proyecto aborda esta problemática mediante el desarrollo de un sistema integral que actúa como puente entre medidores inteligentes DLMS/COSEM y la plataforma ThingsBoard IoT, habilitando así capacidades de monitoreo remoto, análisis histórico y gestión centralizada de infraestructuras de medición eléctrica.
+
+\section{Planteamiento del Problema}
+
+La implementación de sistemas de telemetría para medidores inteligentes enfrenta múltiples desafíos:
+
+\begin{enumerate}
+    \item \textbf{Complejidad del protocolo DLMS/COSEM:} El estándar IEC 62056 define una estructura de comunicación compleja que requiere manejo especializado de tramas HDLC (High-Level Data Link Control), gestión de asociaciones ACSE (Association Control Service Element) y decodificación de objetos COSEM.
+    
+    \item \textbf{Gestión concurrente de múltiples dispositivos:} Los sistemas de medición eléctrica típicamente involucran decenas o cientos de medidores que deben ser monitoreados simultáneamente, lo que requiere arquitecturas escalables y resilientes.
+    
+    \item \textbf{Confiabilidad y recuperación ante fallos:} Las redes de comunicación con medidores pueden presentar interrupciones, desconexiones temporales o errores de transmisión que deben ser manejados de manera robusta para garantizar la integridad de los datos.
+    
+    \item \textbf{Integración con plataformas IoT:} La ausencia de conectores nativos para DLMS/COSEM en plataformas IoT populares dificulta la implementación de soluciones de monitoreo y análisis avanzado.
+    
+    \item \textbf{Visualización y análisis en tiempo real:} Los operadores de sistemas eléctricos requieren dashboards intuitivos, alertas automáticas y capacidades de análisis histórico para la toma de decisiones operativas.
+\end{enumerate}
+
+\section{Objetivos}
+
+\subsection{Objetivo General}
+
+Desarrollar e implementar un sistema integral de telemetría IoT que permita la comunicación bidireccional entre medidores inteligentes basados en el protocolo DLMS/COSEM y la plataforma ThingsBoard, habilitando el monitoreo remoto en tiempo real, el almacenamiento histórico y la visualización de variables eléctricas críticas.
+
+\subsection{Objetivos Específicos}
+
+\begin{enumerate}
+    \item Diseñar e implementar un orquestador de telemetría capaz de gestionar múltiples medidores DLMS/COSEM de manera concurrente, garantizando alta disponibilidad y recuperación automática ante fallos.
+    
+    \item Desarrollar un sistema de adquisición de datos que implemente el estándar IEC 62056 completo, incluyendo autenticación, encriptación y gestión de sesiones HDLC/ACSE.
+    
+    \item Implementar mecanismos de Quality of Service (QoS) nivel 1 para garantizar la entrega confiable de mensajes de telemetría mediante el protocolo MQTT.
+    
+    \item Diseñar y desplegar una infraestructura ThingsBoard contenerizada con soporte para múltiples protocolos de comunicación (MQTT, HTTP, CoAP) y capacidades de procesamiento de eventos en tiempo real.
+    
+    \item Crear dashboards de visualización personalizables que permitan el monitoreo de variables eléctricas (voltaje, corriente, potencia, energía) con alertas automáticas ante condiciones anormales.
+    
+    \item Implementar herramientas de administración y monitoreo que incluyan APIs REST, interfaces CLI y sistemas de logging estructurado para facilitar la operación y el mantenimiento del sistema.
+    
+    \item Validar el sistema mediante pruebas de integración, carga y resiliencia que demuestren su capacidad para operar en entornos de producción.
+\end{enumerate}
+
+\section{Alcance del Proyecto}
+
+El proyecto \textbf{SmartMeter2ThingsBoard-Gateway} comprende el desarrollo completo de dos componentes principales:
+
+\subsection{Componente 1: DLMS Telemetry Orchestrator}
+
+Sistema de software desarrollado en Python que incluye:
+
+\begin{itemize}
+    \item Implementación completa del protocolo DLMS/COSEM según estándar IEC 62056
+    \item Orquestador multi-medidor con soporte para operación concurrente
+    \item Sistema de recuperación automática con tres niveles de resiliencia
+    \item Cliente MQTT con QoS nivel 1 para transmisión confiable de telemetría
+    \item Base de datos SQLite para gestión de configuración y estado
+    \item API REST para control remoto y administración
+    \item Dashboard web para monitoreo y configuración
+    \item Sistema de alertas y notificaciones automáticas
+    \item Herramientas CLI para gestión operativa
+\end{itemize}
+
+\subsection{Componente 2: ThingsBoard Telemetry Platform}
+
+Infraestructura IoT contenerizada que incluye:
+
+\begin{itemize}
+    \item Plataforma ThingsBoard 4.2.1 con arquitectura de microservicios
+    \item Base de datos PostgreSQL 16 para almacenamiento time-series
+    \item Apache Kafka para procesamiento asíncrono de eventos
+    \item Redis para caché y gestión de sesiones
+    \item Soporte SSL/TLS para comunicaciones seguras
+    \item Conectores para múltiples protocolos (MQTT, HTTP, CoAP/LwM2M)
+    \item Dashboards personalizables de visualización
+    \item Sistema de reglas y alertas configurable
+\end{itemize}
+
+\subsection{Limitaciones}
+
+\begin{itemize}
+    \item El sistema está diseñado y probado específicamente con medidores Microstar compatibles con DLMS/COSEM
+    \item La comunicación se realiza mediante interfaz óptica (puerto óptico) y no incluye comunicación remota (GPRS/LTE)
+    \item El proyecto se enfoca en variables eléctricas básicas (voltaje, corriente, potencia, energía) sin incluir mediciones avanzadas de calidad de energía
+    \item El alcance no incluye integración con sistemas SCADA o ERP empresariales
+\end{itemize}
+
+\section{Justificación}
+
+El desarrollo de este sistema se justifica por múltiples razones:
+
+\subsection{Necesidad Tecnológica}
+
+La carencia de soluciones integradas que conecten medidores DLMS/COSEM con plataformas IoT modernas representa una barrera para la modernización de infraestructuras de medición eléctrica. Este proyecto llena ese vacío tecnológico proporcionando una solución completa y documentada.
+
+\subsection{Aplicabilidad Industrial}
+
+Los medidores inteligentes son ampliamente utilizados en:
+\begin{itemize}
+    \item Empresas de distribución eléctrica
+    \item Grandes consumidores industriales
+    \item Edificios inteligentes y campus universitarios
+    \item Microrredes y sistemas de generación distribuida
+    \item Proyectos de investigación en eficiencia energética
+\end{itemize}
+
+\subsection{Aporte Académico}
+
+Este trabajo contribuye al conocimiento en áreas de:
+\begin{itemize}
+    \item Implementación de protocolos industriales complejos
+    \item Diseño de sistemas IoT escalables y resilientes
+    \item Arquitecturas de software para telemetría en tiempo real
+    \item Integración de tecnologías de código abierto para aplicaciones industriales
+\end{itemize}
+
+\subsection{Beneficios Esperados}
+
+\begin{itemize}
+    \item Reducción de costos operativos mediante monitoreo remoto
+    \item Mejora en la toma de decisiones mediante análisis de datos históricos
+    \item Detección temprana de anomalías mediante alertas automáticas
+    \item Optimización del consumo energético mediante visualización en tiempo real
+    \item Escalabilidad para gestionar desde unidades individuales hasta grandes parques de medidores
+\end{itemize}
+
+\section{Metodología}
+
+El desarrollo del proyecto se realizó siguiendo una metodología iterativa e incremental basada en las siguientes fases:
+
+\subsection{Fase 1: Análisis y Diseño}
+\begin{itemize}
+    \item Estudio del estándar IEC 62056 y protocolo DLMS/COSEM
+    \item Análisis de especificaciones técnicas de medidores Microstar
+    \item Diseño de arquitectura de software del sistema completo
+    \item Definición de casos de uso y requisitos funcionales
+\end{itemize}
+
+\subsection{Fase 2: Implementación del Orquestador DLMS}
+\begin{itemize}
+    \item Desarrollo del cliente DLMS/COSEM base
+    \item Implementación del sistema multi-medidor
+    \item Integración con cliente MQTT y mecanismos de QoS
+    \item Desarrollo de sistema de recuperación ante fallos
+\end{itemize}
+
+\subsection{Fase 3: Desarrollo de Herramientas de Administración}
+\begin{itemize}
+    \item Implementación de API REST
+    \item Desarrollo de dashboard web
+    \item Creación de herramientas CLI
+    \item Sistema de logging y monitoreo
+\end{itemize}
+
+\subsection{Fase 4: Despliegue de Infraestructura ThingsBoard}
+\begin{itemize}
+    \item Configuración de arquitectura contenerizada con Docker
+    \item Implementación de certificados SSL/TLS
+    \item Configuración de conectores y reglas de procesamiento
+    \item Desarrollo de dashboards de visualización
+\end{itemize}
+
+\subsection{Fase 5: Integración y Pruebas}
+\begin{itemize}
+    \item Pruebas de integración entre componentes
+    \item Pruebas de carga y rendimiento
+    \item Pruebas de resiliencia y recuperación
+    \item Validación en entorno de producción
+\end{itemize}
+
+\subsection{Fase 6: Documentación}
+\begin{itemize}
+    \item Documentación técnica del sistema
+    \item Guías de instalación y operación
+    \item Documentación de APIs
+    \item Elaboración de este documento de trabajo de grado
+\end{itemize}
+
+\section{Organización del Documento}
+
+Este documento está estructurado de la siguiente manera:
+
+\begin{itemize}
+    \item \textbf{Capítulo 2 - Marco Teórico:} Presenta los fundamentos teóricos relacionados con el protocolo DLMS/COSEM, plataformas IoT, comunicación MQTT y arquitecturas de telemetría.
+    
+    \item \textbf{Capítulo 3 - Arquitectura del Sistema:} Describe en detalle la arquitectura de software y hardware del sistema, incluyendo diagramas, componentes y patrones de diseño utilizados.
+    
+    \item \textbf{Capítulo 4 - Implementación:} Explica las decisiones técnicas, algoritmos implementados y detalles de desarrollo de cada componente del sistema.
+    
+    \item \textbf{Capítulo 5 - Pruebas y Resultados:} Presenta las pruebas realizadas, métricas obtenidas y análisis de rendimiento del sistema.
+    
+    \item \textbf{Capítulo 6 - Conclusiones y Trabajo Futuro:} Resume los logros del proyecto, presenta conclusiones y propone líneas de trabajo futuro.
+    
+    \item \textbf{Anexos:} Incluye documentación técnica adicional, diagramas detallados, ejemplos de código y guías de usuario.
+\end{itemize}
